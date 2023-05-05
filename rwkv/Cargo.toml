@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 rwkv-sys = {path = "sys", version = "0.1"}
+tokenizers = "^0.13.3"
+thiserror = "^1.0.40"
