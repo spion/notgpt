@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+  "notgpt-bin",
+  "rwkv",
+  "rwkv/sys"
+]
+
+# resolver = "2"
