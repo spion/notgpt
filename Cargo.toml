@@ -2,6 +2,7 @@
 
 members = [
   "notgpt-bin",
+  "notgpt-cli",
   "rwkv",
   "rwkv/sys"
 ]

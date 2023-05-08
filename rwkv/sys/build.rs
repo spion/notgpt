@@ -1,15 +1,26 @@
-use std::{path::PathBuf, env};
+use std::{env, path::PathBuf};
 
-use cmake;
+use cmake::Config;
 
 fn main() {
   println!("cargo:rerun-if-changed=rwkv.cpp");
   // Builds the project in the directory located in `libfoo`, installing it
   // into $OUT_DIR
-  let dst = cmake::build("rwkv.cpp");
 
-  println!("cargo:rustc-link-search=native={}/build", dst.display());
-  println!("cargo:rustc-link-lib=dylib=librwkv");
+  let dst = Config::new("rwkv.cpp")
+    .define("RWKV_STATIC", "ON")
+    .define("RWKV_BUILD_SHARED_LIBRARY", "OFF")
+    .build()
+    .join("build");
+
+  println!("cargo:rustc-link-search=native={}", dst.display());
+  println!(
+    "cargo:rustc-link-search=native={}",
+    dst.join("ggml").join("src").display()
+  );
+  // println!("cargo:rustc-link-lib=dylib=rwkv");
+  println!("cargo:rustc-link-lib=static=rwkv");
+  println!("cargo:rustc-link-lib=static=ggml");
 
   let bindings = bindgen::Builder::default()
     // The input header we would like to generate
