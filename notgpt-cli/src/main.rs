@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use tokenizers::Tokenizer;
 
 fn main() -> Result<()> {
-  println!("Hello, world!");
+  println!("Loading model...");
 
   let model_path = std::env::var("MODEL_PATH")
     .with_context(|| "MODEL_PATH variable unset, set it to the path of the RWKV model")?;
@@ -24,6 +24,7 @@ fn main() -> Result<()> {
 
   let mut chat = RWKVChat::new(&model, &tokenizer);
 
+  println!("Model loaded");
   print!("> ");
   for line in io::stdin().lines() {
     let response = chat.generate_response(&line?)?;

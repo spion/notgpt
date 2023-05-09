@@ -151,7 +151,7 @@ impl<'a> RWKVChat<'a> {
         .into_iter()
         .take_while(|(_id, p)| {
           running_sum += p;
-          running_sum < top_p && running_sum <= 0.0 // at least one
+          running_sum < top_p || running_sum <= 0.0 // at least one
         })
         .collect();
     }
@@ -173,7 +173,7 @@ impl<'a> RWKVChat<'a> {
       .into_iter()
       .take_while(|(_id, p)| {
         running_sum += p / sum_probabilities;
-        running_sum < rand_probability && running_sum <= 0.0 // at least one
+        running_sum < rand_probability || running_sum <= 0.0 // at least one
       })
       .last()
       .expect("Unexpected zero tokens returned.");
