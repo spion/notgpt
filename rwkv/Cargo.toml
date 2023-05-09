@@ -10,3 +10,4 @@ rwkv-sys = {path = "sys", version = "0.1"}
 tokenizers = "^0.13.3"
 thiserror = "^1.0.40"
 rand = "^0.8.5"
+log = "0.4"
