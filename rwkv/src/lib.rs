@@ -3,11 +3,12 @@
 use std::{
   cmp::Ordering,
   ffi::{c_char, CString},
+  iter::Iterator,
   path::Path,
   ptr,
 };
 
-use rand::Rng;
+use rand::{distributions::WeightedIndex, prelude::Distribution};
 use rwkv_sys;
 use thiserror::Error;
 use tokenizers::tokenizer::Tokenizer;
@@ -117,12 +118,11 @@ impl RWKVModel {
   }
 }
 
-const EPSILON: f32 = 0.0001;
-
 pub struct RWKVChat<'a> {
   model: &'a RWKVModel,
   tokenizer: &'a Tokenizer,
   current_state: Option<Vec<f32>>,
+  predicted_token: u32,
 }
 
 fn softmax(vec: &Vec<f32>) -> Vec<f32> {
@@ -131,19 +131,39 @@ fn softmax(vec: &Vec<f32>) -> Vec<f32> {
   vec.iter().map(|val| val.exp() / denominator).collect()
 }
 
+fn random_choice<T>(probabilities: T) -> usize
+where
+  T: Iterator<Item = f32>,
+{
+  let mut rng = rand::thread_rng();
+  let dist = WeightedIndex::new(probabilities).expect("Invalid probabilities");
+
+  dist.sample(&mut rng)
+}
+
 impl<'a> RWKVChat<'a> {
   pub fn new(model: &'a RWKVModel, tokenizer: &'a Tokenizer) -> RWKVChat<'a> {
     RWKVChat {
       model: model,
       tokenizer: tokenizer,
       current_state: None,
+      predicted_token: 0,
     }
   }
 
-  fn pick_token(&self, logits: Vec<f32>, temp: f32, top_p: f32) -> usize {
+  fn pick_token(&self, logits: Vec<f32>, temp: f32, top_p: f32) -> u32 {
+    if temp <= f32::EPSILON {
+      let (id, _val) = logits
+        .iter()
+        .enumerate()
+        .max_by(|(_id1, p1), (_id2, p2)| p1.partial_cmp(p2).unwrap_or(Ordering::Equal))
+        .expect("Max must be there");
+
+      return id as u32;
+    }
     let mut probabilities = softmax(&logits).into_iter().enumerate().collect::<Vec<_>>();
 
-    if (top_p - 1.0).abs() > EPSILON {
+    if (top_p - 1.0).abs() > f32::EPSILON {
       probabilities.sort_by(|(_id1, p1), (_id2, p2)| p1.partial_cmp(p2).unwrap_or(Ordering::Equal));
 
       let mut running_sum: f32 = 0.0;
@@ -156,29 +176,31 @@ impl<'a> RWKVChat<'a> {
         .collect();
     }
 
-    if (temp - 1.0).abs() > EPSILON {
+    if (temp - 1.0).abs() > f32::EPSILON {
       probabilities = probabilities
         .into_iter()
         .map(|(id, p)| (id, p.powf(temp)))
         .collect();
     }
 
-    let sum_probabilities: f32 = probabilities.iter().map(|(_id, p)| p).sum();
+    // let sum_probabilities: f32 = probabilities.iter().map(|(_id, p)| p).sum();
 
-    let mut rng = rand::thread_rng();
-    let rand_probability: f32 = rng.gen();
+    random_choice(probabilities.into_iter().map(|(_id, p)| p)) as u32
 
-    let mut running_sum = 0.0;
-    let (stop_token_id, _) = probabilities
-      .into_iter()
-      .take_while(|(_id, p)| {
-        running_sum += p / sum_probabilities;
-        running_sum < rand_probability || running_sum <= 0.0 // at least one
-      })
-      .last()
-      .expect("Unexpected zero tokens returned.");
+    // let mut rng = rand::thread_rng();
+    // let rand_probability: f32 = rng.gen();
 
-    stop_token_id
+    // let mut running_sum = 0.0;
+    // let (stop_token_id, _) = probabilities
+    //   .into_iter()
+    //   .take_while(|(_id, p)| {
+    //     running_sum += p / sum_probabilities;
+    //     running_sum < rand_probability || running_sum <= 0.0 // at least one
+    //   })
+    //   .last()
+    //   .expect("Unexpected zero tokens returned.");
+
+    // stop_token_id
   }
 
   pub fn generate_response(&mut self, text: &str) -> Result<String, RWKVError> {
@@ -187,29 +209,36 @@ impl<'a> RWKVChat<'a> {
       .encode(text, true)
       .map_err(|e| RWKVError::TokenEncodeError { source: e })?;
 
-    let mut last_token: u32 = 0;
-
+    println!("Loading tokens...");
     for token in encoding.get_ids() {
       let res = self.model.predict(&self.current_state, *token)?;
-      last_token = self.pick_token(res.next_logits, 1.0, 0.8) as u32;
+      self.predicted_token = self.pick_token(res.next_logits, 0.0, 1.0) as u32;
       self.current_state = Some(res.next_state);
     }
 
-    let mut tokens: Vec<u32> = vec![last_token];
-    let mut max_tokens_per_response = 2048; // todo: configurable
+    let mut tokens: Vec<u32> = vec![self.predicted_token];
+    let mut max_tokens_per_response = 128; // todo: configurable
 
-    while last_token != 0 && max_tokens_per_response > 0 {
-      let res = self.model.predict(&self.current_state, last_token)?;
-      last_token = self.pick_token(res.next_logits, 1.0, 0.8) as u32;
+    println!(
+      "Generating response... logits_size={}",
+      self.model.logits_buffer_element_count
+    );
+    while self.predicted_token != 0 && max_tokens_per_response > 0 {
+      let res = self
+        .model
+        .predict(&self.current_state, self.predicted_token)?;
+
+      self.predicted_token = self.pick_token(res.next_logits, 0.0, 1.0) as u32;
       self.current_state = Some(res.next_state);
 
-      if last_token != 0 {
-        tokens.push(last_token)
+      if self.predicted_token != 0 {
+        tokens.push(self.predicted_token)
       }
 
       max_tokens_per_response -= 1;
     }
 
+    println!("Predicted tokens {:?}", tokens);
     let res = self
       .tokenizer
       .decode(tokens, true)
@@ -217,4 +246,6 @@ impl<'a> RWKVChat<'a> {
 
     Ok(res)
   }
+
+  // pub fn load_text(&mut self, text: &str)
 }
