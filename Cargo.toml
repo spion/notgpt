@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-  "notgpt-bin",
+  "notgpt-telegram",
   "notgpt-cli",
   "rwkv",
   "rwkv/sys"

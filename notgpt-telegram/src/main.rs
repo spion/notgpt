@@ -1,25 +1,29 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::{
+  collections::{hash_map::Entry, HashMap},
+  sync::Arc,
+};
 
 use anyhow::{anyhow, Context, Result};
 use frankenstein::{
   AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, SendMessageParams, UpdateContent,
 };
+use tokio::sync::Mutex;
 
 struct BotOptions {
-  model_path: String,
-  tokens_path: String,
-  api_token: String,
-  n_threads: u32,
+  pub model_path: String,
+  pub tokens_path: String,
+  pub api_token: String,
+  pub n_threads: u32,
 }
 
-struct Bot<'a> {
+struct Bot {
   model: rwkv::Model,
-  channels: HashMap<i64, rwkv::Session<'a>>,
+  channels: HashMap<i64, rwkv::Session>,
   api: AsyncApi,
 }
 
-impl<'a> Bot<'a> {
-  fn new(options: BotOptions) -> Result<Bot<'a>> {
+impl Bot {
+  fn new(options: BotOptions) -> Result<Bot> {
     Ok(Bot {
       model: rwkv::Model::new(&options.model_path, &options.tokens_path, options.n_threads)?,
       channels: HashMap::new(),
@@ -27,58 +31,184 @@ impl<'a> Bot<'a> {
     })
   }
 
-  pub async fn run_bot_loop(&self) {
+  pub fn process_messages(&mut self, messages: Vec<Message>) -> Result<Vec<SendMessageParams>> {
+    let mut results: Vec<SendMessageParams> = vec![];
+
+    for message in messages {
+      let response = self.process_message(message)?;
+      match response {
+        Some(res) => {
+          results.push(res);
+        }
+        None => {}
+      }
+    }
+
+    Ok(results)
+  }
+
+  pub async fn run_bot_loop(bot_ref: Arc<Mutex<Bot>>) {
     let update_params_builder = GetUpdatesParams::builder();
     let mut update_params = update_params_builder.clone().build();
+    let api = { bot_ref.lock().await.api.clone() };
 
     loop {
-      let result = self.api.get_updates(&update_params).await;
+      let result = api.get_updates(&update_params).await;
 
       log::debug!("result: {result:?}");
 
       match result {
         Ok(response) => {
-          for update in response.result {
-            if let UpdateContent::Message(message) = update.content {
-              self.process_message(message).await;
+          let messages = response
+            .result
+            .iter()
+            .flat_map(|update| {
+              if let UpdateContent::Message(message) = update.content.clone() {
+                vec![message]
+              } else {
+                vec![]
+              }
+            })
+            .collect::<Vec<_>>();
+
+          let responses = {
+            let mut bot = bot_ref.lock().await;
+            bot.process_messages(messages)
+          };
+          match responses {
+            Err(err) => {
+              log::warn!("Failed to process message: {err:?}");
             }
-            update_params = update_params_builder
-              .clone()
-              .offset(update.update_id + 1)
-              .build();
+            Ok(messages) => {
+              for message in messages {
+                match api.send_message(&message).await {
+                  Err(err) => {
+                    log::warn!("Failed to send message: {err:?}");
+                  }
+                  _ => {}
+                }
+              }
+            }
           }
+
+          let last_update = response
+            .result
+            .iter()
+            .last()
+            .expect("Must have at least one update");
+          update_params = update_params_builder
+            .clone()
+            .offset(last_update.update_id + 1)
+            .build();
         }
+
         Err(error) => {
           log::warn!("Failed to get updates: {error:?}");
         }
       }
     }
   }
-  async fn process_message(&self, message: Message) {
-    // message.from.unwrap().username.unwrap();
-    // match message.entities.unwrap()[0].type_field {
-    //   frankenstein::MessageEntityType::Mention
-    // }
-    let send_message_params = SendMessageParams::builder()
-      .chat_id(message.chat.id)
-      .text("hello")
-      .reply_to_message_id(message.message_id)
-      .build();
 
-    if let Err(err) = self.api.send_message(&send_message_params).await {
-      log::warn!("Failed to send message: {err:?}");
+  fn process_message(&mut self, message: Message) -> Result<Option<SendMessageParams>> {
+    let session = self.get_or_create_session(&message.chat.id)?;
+
+    let mut was_mentioned = false;
+
+    for item in message.entities.unwrap_or_default() {
+      match item.type_field {
+        frankenstein::MessageEntityType::Mention => {
+          let mention_content = message.text.clone().unwrap()
+            [(item.offset as usize)..((item.offset + item.length) as usize)]
+            .to_string();
+
+          if mention_content == "notgpt" {
+            was_mentioned = true;
+          }
+        }
+        _ => {}
+      }
+    }
+
+    let text = format!(
+      "{0}: {1}\n\n",
+      message.from.unwrap().username.unwrap(),
+      message.text.unwrap()
+    );
+    session.consume_text(&text)?;
+
+    if was_mentioned {
+      session.consume_text("not_gpt: ")?;
+
+      let output = session.produce_text()?;
+
+      let send_message_params = SendMessageParams::builder()
+        .chat_id(message.chat.id)
+        .text(output)
+        .reply_to_message_id(message.message_id)
+        .build();
+      Ok(Some(send_message_params))
+    } else {
+      Ok(None)
     }
   }
 
-  fn get_or_create_session(&'a mut self, id: &i64) -> Result<&rwkv::Session<'a>> {
+  fn initial_prompt(bot_username: String) -> String {
+    format!(
+      r#"
+
+The following is a verbose and detailed Telegram channel conversation between multiple people and an AI assistant called {0}. The people in the channel may mention {0} by including his name with an @ prefix, like so: @{0}. {0} is intelligent, knowledgeable, wise and polite, and when mentioned responds appropriately taking into account both the message and the previous context.
+
+Jack Jones: What year was the french revolution?
+
+Jill Someone: Not sure. Could we ask @{0}?
+
+{0}: The French Revolution started in 1789, and lasted 10 years until 1799.
+
+The Math Nerd: Wow, thats pretty impressive.
+
+Moe: What is?
+
+The Math Nerd: Look. @{0} 3+5=?
+
+{0}: The answer is 8.
+
+Moe: can you gues who I'll marry @{0}?
+
+{0}: Only if you tell me more about yourself - what are your interests?
+
+The Math Nerd: hah, he got you.
+
+The Math Nerd: solve for a: 9-a=2 @{0}
+
+{0}: The answer is a = 7, because 9 - 7 = 2.
+
+User: wat is lhc?
+
+Jill Someone: If you are talking to {0} you have to mention it. @{0} can you answer?
+
+{0}: LHC is a high-energy particle collider, built by CERN, and completed in 2008. They used it to confirm the existence of the Higgs boson in 2012.
+
+"#,
+      bot_username
+    )
+  }
+
+  fn get_or_create_session(&mut self, id: &i64) -> Result<&mut rwkv::Session> {
     match self.channels.entry(*id) {
       Entry::Occupied(occupied) => {
         // If the entry exists, return a reference to the existing ChatbotSession
         Ok(occupied.into_mut())
       }
       Entry::Vacant(vacant) => {
+        let initial_prompt = Bot::initial_prompt("notgpt".to_string());
         // If the entry does not exist, create a new ChatbotSession and insert it
-        let session = self.model.create_session()?;
+        let session = self.model.create_session_custom(&rwkv::SessionOptions {
+          prompt: rwkv::Prompt {
+            prompt: initial_prompt,
+            ..Default::default()
+          },
+          ..Default::default()
+        })?;
         Ok(vacant.insert(session))
       }
     }
@@ -109,5 +239,8 @@ async fn main() -> Result<()> {
     .map_err(|e| anyhow!(e))
     .with_context(|| "Unable ot initialize BotState")?;
 
-  Ok(bot.run_bot_loop().await)
+  let bot_ref = Arc::new(Mutex::new(bot));
+  Bot::run_bot_loop(bot_ref).await;
+
+  Ok(())
 }

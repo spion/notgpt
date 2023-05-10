@@ -9,3 +9,5 @@ edition = "2021"
 rwkv = {path = "../rwkv"}
 anyhow = "^1.0.71"
 tokenizers = "^0.13.3"
+log = "0.4"
+env_logger = "^0.10"
