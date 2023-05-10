@@ -6,6 +6,7 @@ use std::{
   iter::Iterator,
   path::Path,
   ptr,
+  sync::Arc,
 };
 
 use rand::{distributions::WeightedIndex, prelude::Distribution};
@@ -120,8 +121,8 @@ impl ModelBindings {
 }
 
 pub struct Model {
-  model_binding: ModelBindings,
-  tokenizer: Tokenizer,
+  model_binding: Arc<ModelBindings>,
+  tokenizer: Arc<Tokenizer>,
 }
 
 impl Model {
@@ -135,19 +136,23 @@ impl Model {
       Tokenizer::from_file(tokens_path).map_err(|e| RWKVError::TokenReadFailure { source: e })?;
 
     Ok(Model {
-      model_binding: model_lib,
-      tokenizer,
+      model_binding: Arc::new(model_lib),
+      tokenizer: Arc::new(tokenizer),
     })
   }
 
-  pub fn create_session_custom<'a>(
-    &'a self,
+  pub fn create_session_custom(
+    &self,
     session_options: &SessionOptions,
-  ) -> Result<Session<'a>, RWKVError> {
-    Session::new(&self, session_options)
+  ) -> Result<Session, RWKVError> {
+    Session::new(
+      Arc::clone(&self.model_binding),
+      Arc::clone(&self.tokenizer),
+      session_options,
+    )
   }
 
-  pub fn create_session<'a>(&'a self) -> Result<Session<'a>, RWKVError> {
+  pub fn create_session<'a>(&'a self) -> Result<Session, RWKVError> {
     self.create_session_custom(&Default::default())
   }
 }
@@ -159,10 +164,10 @@ pub struct PredictResult {
 
 #[derive(Clone)]
 pub struct Prompt {
-  user: String,
-  bot: String,
-  separator: String,
-  prompt: String,
+  pub user: String,
+  pub bot: String,
+  pub separator: String,
+  pub prompt: String,
 }
 
 impl Default for Prompt {
@@ -171,18 +176,42 @@ impl Default for Prompt {
       user: "User".to_string(),
       bot: "Bot".to_string(),
       separator: ":".to_string(),
-      prompt: "\nThe following is a verbose and detailed conversation between an AI assistant called Bot, and a human user called User. Bot is intelligent, knowledgeable, wise and polite.\n\nUser: french revolution what year\n\nBot: The French Revolution started in 1789, and lasted 10 years until 1799.\n\nUser: 3+5=?\n\nBot: The answer is 8.\n\nUser: Can you gues who I'll marry?\n\nBot: Only if you tell me more about yourself - what are your interests?\n\nUser: solve for a: 9-a=2\n\nBot: The answer is a = 7, because 9 - 7 = 2.\n\nUser: wat is lhc\n\nBot: LHC is a high-energy particle collider, built by CERN, and completed in 2008. They used it to confirm the existence of the Higgs boson in 2012.\n\n".to_string()
+      prompt: r#"
+The following is a verbose and detailed conversation between an AI assistant called Bot, and a human user called User. Bot is intelligent, knowledgeable, wise and polite.
+
+User: french revolution what year
+
+Bot: The French Revolution started in 1789, and lasted 10 years until 1799.
+
+User: 3+5=?
+
+Bot: The answer is 8.
+
+User: Can you gues who I'll marry?
+
+Bot: Only if you tell me more about yourself - what are your interests?
+
+User: solve for a: 9-a=2
+
+Bot: The answer is a = 7, because 9 - 7 = 2.
+
+User: wat is lhc
+
+Bot: LHC is a high-energy particle collider, built by CERN, and completed in 2008. They used it to confirm the existence of the Higgs boson in 2012.
+
+"#.to_string()
     }
   }
 }
 
 #[derive(Default)]
 pub struct SessionOptions {
-  prompt: Prompt,
+  pub prompt: Prompt,
 }
 
-pub struct Session<'a> {
-  model: &'a Model,
+pub struct Session {
+  model: Arc<ModelBindings>,
+  tokenizer: Arc<Tokenizer>,
   current_state: Option<Vec<f32>>,
   last_logits: Vec<f32>,
   initial_prompt: Prompt,
@@ -207,10 +236,15 @@ fn random_choice(items: &Vec<(usize, f32)>) -> usize {
   *id
 }
 
-impl<'a> Session<'a> {
-  pub fn new(model: &'a Model, options: &SessionOptions) -> Result<Session<'a>, RWKVError> {
+impl Session {
+  fn new(
+    model: Arc<ModelBindings>,
+    tokenizer: Arc<Tokenizer>,
+    options: &SessionOptions,
+  ) -> Result<Session, RWKVError> {
     let mut chat = Session {
       model,
+      tokenizer,
       current_state: None,
       last_logits: vec![],
       initial_prompt: options.prompt.clone(),
@@ -278,18 +312,14 @@ impl<'a> Session<'a> {
   }
 
   fn consume_single_token(&mut self, token: u32) -> Result<(), RWKVError> {
-    let res = self
-      .model
-      .model_binding
-      .predict(&self.current_state, token)?;
+    let res = self.model.predict(&self.current_state, token)?;
     self.last_logits = res.next_logits;
     self.current_state = Some(res.next_state);
     Ok(())
   }
 
-  fn consume_text(&mut self, text: &str) -> Result<(), RWKVError> {
+  pub fn consume_text(&mut self, text: &str) -> Result<(), RWKVError> {
     let encoding = self
-      .model
       .tokenizer
       .encode(text.to_string(), true)
       .map_err(|e| RWKVError::TokenEncodeError { source: e })?;
@@ -302,7 +332,7 @@ impl<'a> Session<'a> {
     Ok(())
   }
 
-  fn produce_text(&mut self) -> Result<String, RWKVError> {
+  pub fn produce_text(&mut self) -> Result<String, RWKVError> {
     let mut tokens: Vec<u32> = vec![];
     let mut max_tokens_per_response = 4096; // todo: configurable
 
@@ -329,7 +359,6 @@ impl<'a> Session<'a> {
 
     log::debug!("Predicted tokens {:?}", tokens);
     let res = self
-      .model
       .tokenizer
       .decode(tokens, true)
       .map_err(|e| RWKVError::TokenDecodeError { source: e })?;
