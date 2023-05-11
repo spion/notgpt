@@ -213,6 +213,7 @@ pub struct Session {
   model: Arc<ModelBindings>,
   tokenizer: Arc<Tokenizer>,
   current_state: Option<Vec<f32>>,
+  text_so_far: String,
   last_logits: Vec<f32>,
   initial_prompt: Prompt,
 }
@@ -227,6 +228,7 @@ impl Session {
       model,
       tokenizer,
       current_state: None,
+      text_so_far: "".to_string(),
       last_logits: vec![],
       initial_prompt: options.prompt.clone(),
     };
@@ -249,7 +251,14 @@ impl Session {
       .encode(text.to_string(), true)
       .map_err(|e| RWKVError::TokenEncodeError { source: e })?;
 
-    log::debug!("Loading {} = {} tokens...", text, encoding.get_ids().len());
+    log::debug!(
+      "Loading '{}' = {} tokens...",
+      text,
+      encoding.get_ids().len()
+    );
+
+    self.text_so_far += text;
+
     for token in encoding.get_ids() {
       self.consume_single_token(*token as u32)?;
     }
@@ -257,9 +266,9 @@ impl Session {
     Ok(())
   }
 
-  pub fn produce_text(&mut self) -> Result<String, RWKVError> {
+  pub fn produce_text(&mut self, max_tokens: u32) -> Result<String, RWKVError> {
     let mut tokens: Vec<u32> = vec![];
-    let mut max_tokens_per_response = 4096; // todo: configurable
+    let mut max_tokens_per_response = max_tokens;
 
     loop {
       if max_tokens_per_response % 8 == 0 {
@@ -297,14 +306,15 @@ impl Session {
     let res = self
       .tokenizer
       .decode(tokens, true)
-      .map_err(|e| RWKVError::TokenDecodeError { source: e })?
-      .trim()
-      .to_string();
+      .map_err(|e| RWKVError::TokenDecodeError { source: e })?;
 
-    Ok(res)
+    self.text_so_far += &format!("[[{}]]", res);
+
+    log::debug!("Text so far: {}", self.text_so_far);
+    Ok(res.trim().to_string())
   }
 
-  pub fn generate_response(&mut self, text: &str) -> Result<String, RWKVError> {
+  pub fn generate_response(&mut self, text: &str, max_tokens: u32) -> Result<String, RWKVError> {
     let input_format = format!(
       "{}{} {}\n\n{}{}",
       self.initial_prompt.user,
@@ -316,8 +326,9 @@ impl Session {
 
     log::info!("Patterning response with {:?}", input_format);
     self.consume_text(&input_format)?;
-    let res = self.produce_text();
+    let res = self.produce_text(max_tokens);
     log::info!("Produced response {:?}", res);
+
     res
   }
 }

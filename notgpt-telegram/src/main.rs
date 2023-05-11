@@ -149,25 +149,30 @@ impl Bot {
     log::debug!("Processing {:?}", &message);
 
     let user = message.from.unwrap();
-    let text = message.text.unwrap();
+    let msg_text = message
+      .text
+      .unwrap()
+      .replace(&format!("@{}", username), "")
+      .trim()
+      .to_string();
 
     let text = format!(
       "{0}: {1}\n\n",
       user.username.unwrap_or(user.first_name),
-      text
+      msg_text
     );
     session.consume_text(&text)?;
 
     if was_mentioned {
-      let additional_text = format!("{}: ", username.to_string());
+      let additional_text = format!("{}:", username.to_string());
       session.consume_text(&additional_text)?;
 
-      let output = session.produce_text()?;
+      let output = session.produce_text(512)?;
 
       let send_message_params = SendMessageParams::builder()
         .chat_id(message.chat.id)
         .text(output)
-        .reply_to_message_id(message.message_id)
+        // .reply_to_message_id(message.message_id)
         .build();
       Ok(Some(send_message_params))
     } else {
@@ -179,11 +184,11 @@ impl Bot {
     format!(
       r#"
 
-The following is a verbose and detailed Telegram channel conversation between multiple people and an AI assistant called {0}. The people in the channel may mention {0} by including his name with an @ prefix, like so: @{0}. {0} is intelligent, knowledgeable, wise and polite, and when mentioned responds appropriately taking into account both the message and the previous context.
+The following is a verbose and detailed conversation between multiple people and an AI assistant called {0}. The people may sometimes ask a question where {0} might need to answer. {0} is intelligent, knowledgeable, wise and polite, and when appropriate responds, taking into account both the message and the previous text.
 
 Jack Jones: What year was the french revolution?
 
-Jill Someone: Not sure. Could we ask @{0}?
+Jill Someone: Not sure. {0} what year was it?
 
 {0}: The French Revolution started in 1789, and lasted 10 years until 1799.
 
@@ -191,23 +196,21 @@ The Math Nerd: Wow, thats pretty impressive.
 
 Moe: What is?
 
-The Math Nerd: Look. @{0} 3+5=?
+The Math Nerd: 3+5=?
 
 {0}: The answer is 8.
 
-Moe: can you gues who I'll marry @{0}?
+Moe: can you gues who I'll marry?
 
 {0}: Only if you tell me more about yourself - what are your interests?
 
 The Math Nerd: hah, he got you.
 
-The Math Nerd: solve for a: 9-a=2 @{0}
+The Math Nerd: solve for a: 9-a=2
 
 {0}: The answer is a = 7, because 9 - 7 = 2.
 
 User: wat is lhc?
-
-Jill Someone: If you are talking to {0} you have to mention it. @{0} can you answer?
 
 {0}: LHC is a high-energy particle collider, built by CERN, and completed in 2008. They used it to confirm the existence of the Higgs boson in 2012.
 

@@ -15,15 +15,15 @@ fn main() -> Result<()> {
 
   let model = Model::new(&model_path, &tokens_path, 6)
     .map_err(|e| anyhow!(e))
-    .with_context(|| "Unable ot initialize model")?;
+    .with_context(|| "Unable to initialize model")?;
 
   let mut chat = model.create_session()?;
 
-  log::info!("Model loaded");
+  log::info!("Sesison started");
 
   println!("> ");
   for line in io::stdin().lines() {
-    let response = chat.generate_response(&line?)?;
+    let response = chat.generate_response(&line?, 512)?;
     println!("{}", response);
 
     println!("> ")
