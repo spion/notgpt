@@ -14,12 +14,14 @@ struct BotOptions {
   pub tokens_path: String,
   pub api_token: String,
   pub n_threads: u32,
+  pub username: String,
 }
 
 struct Bot {
   model: rwkv::Model,
   channels: HashMap<i64, rwkv::Session>,
   api: AsyncApi,
+  username: String,
 }
 
 impl Bot {
@@ -28,14 +30,19 @@ impl Bot {
       model: rwkv::Model::new(&options.model_path, &options.tokens_path, options.n_threads)?,
       channels: HashMap::new(),
       api: AsyncApi::new(&options.api_token),
+      username: options.username,
     })
   }
 
-  pub fn process_messages(&mut self, messages: Vec<Message>) -> Result<Vec<SendMessageParams>> {
+  pub fn process_messages(
+    &mut self,
+    username: &String,
+    messages: Vec<Message>,
+  ) -> Result<Vec<SendMessageParams>> {
     let mut results: Vec<SendMessageParams> = vec![];
 
     for message in messages {
-      let response = self.process_message(message)?;
+      let response = self.process_message(username, message)?;
       match response {
         Some(res) => {
           results.push(res);
@@ -55,32 +62,36 @@ impl Bot {
     loop {
       let result = api.get_updates(&update_params).await;
 
-      log::debug!("result: {result:?}");
-
       match result {
         Ok(response) => {
+          // let response_len = response.result.len();
+          log::debug!("Response is {:?}", response);
+
           let messages = response
             .result
             .iter()
-            .flat_map(|update| {
-              if let UpdateContent::Message(message) = update.content.clone() {
-                vec![message]
-              } else {
+            .flat_map(|update| match update.content.clone() {
+              UpdateContent::Message(message) if message.text.is_some() => vec![message],
+              _ => {
+                log::debug!("Non message event {:?}", update);
                 vec![]
               }
             })
             .collect::<Vec<_>>();
 
+          let username = { bot_ref.lock().await.username.clone() };
+
           let responses = {
             let mut bot = bot_ref.lock().await;
-            bot.process_messages(messages)
+            bot.process_messages(&username, messages)
           };
           match responses {
             Err(err) => {
-              log::warn!("Failed to process message: {err:?}");
+              log::warn!("Failed to process message:s {err:?}");
             }
             Ok(messages) => {
               for message in messages {
+                log::debug!("Sending message: {:?}", message);
                 match api.send_message(&message).await {
                   Err(err) => {
                     log::warn!("Failed to send message: {err:?}");
@@ -91,15 +102,15 @@ impl Bot {
             }
           }
 
-          let last_update = response
-            .result
-            .iter()
-            .last()
-            .expect("Must have at least one update");
-          update_params = update_params_builder
-            .clone()
-            .offset(last_update.update_id + 1)
-            .build();
+          let last_update = response.result.iter().last();
+
+          update_params = match last_update {
+            Some(update) => update_params_builder
+              .clone()
+              .offset(update.update_id + 1)
+              .build(),
+            None => update_params,
+          }
         }
 
         Err(error) => {
@@ -109,19 +120,25 @@ impl Bot {
     }
   }
 
-  fn process_message(&mut self, message: Message) -> Result<Option<SendMessageParams>> {
+  fn process_message(
+    &mut self,
+    username: &String,
+    message: Message,
+  ) -> Result<Option<SendMessageParams>> {
     let session = self.get_or_create_session(&message.chat.id)?;
 
     let mut was_mentioned = false;
 
-    for item in message.entities.unwrap_or_default() {
+    for item in message.entities.clone().unwrap_or_default() {
       match item.type_field {
         frankenstein::MessageEntityType::Mention => {
           let mention_content = message.text.clone().unwrap()
             [(item.offset as usize)..((item.offset + item.length) as usize)]
             .to_string();
 
-          if mention_content == "notgpt" {
+          log::debug!("Found mention: {}", mention_content);
+
+          if &mention_content == username || mention_content == format!("@{}", username) {
             was_mentioned = true;
           }
         }
@@ -129,15 +146,21 @@ impl Bot {
       }
     }
 
+    log::debug!("Processing {:?}", &message);
+
+    let user = message.from.unwrap();
+    let text = message.text.unwrap();
+
     let text = format!(
       "{0}: {1}\n\n",
-      message.from.unwrap().username.unwrap(),
-      message.text.unwrap()
+      user.username.unwrap_or(user.first_name),
+      text
     );
     session.consume_text(&text)?;
 
     if was_mentioned {
-      session.consume_text("not_gpt: ")?;
+      let additional_text = format!("{}: ", username.to_string());
+      session.consume_text(&additional_text)?;
 
       let output = session.produce_text()?;
 
@@ -152,7 +175,7 @@ impl Bot {
     }
   }
 
-  fn initial_prompt(bot_username: String) -> String {
+  fn initial_prompt(bot_username: &String) -> String {
     format!(
       r#"
 
@@ -200,7 +223,7 @@ Jill Someone: If you are talking to {0} you have to mention it. @{0} can you ans
         Ok(occupied.into_mut())
       }
       Entry::Vacant(vacant) => {
-        let initial_prompt = Bot::initial_prompt("notgpt".to_string());
+        let initial_prompt = Bot::initial_prompt(&self.username);
         // If the entry does not exist, create a new ChatbotSession and insert it
         let session = self.model.create_session_custom(&rwkv::SessionOptions {
           prompt: rwkv::Prompt {
@@ -225,14 +248,18 @@ async fn main() -> Result<()> {
   let tokens_path = std::env::var("TOKENS_PATH")
     .with_context(|| "TOKENS_PATH variable unset, set it to the path of the RWKV tokenizer json")?;
 
-  let api_token =
-    std::env::var("BOT_TOKEN").with_context(|| "BOT_TOKEN not set to telegram API token")?;
+  let api_token = std::env::var("BOT_TOKEN")
+    .with_context(|| "BOT_TOKEN not set to telegram API token, please configure")?;
+
+  let username = std::env::var("BOT_USERNAME")
+    .with_context(|| "BOT_USERNAME not set to telegram bot username")?;
 
   let bot_options = BotOptions {
     model_path,
     tokens_path,
     api_token,
     n_threads: 4,
+    username,
   };
 
   let bot = Bot::new(bot_options)

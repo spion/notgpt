@@ -1,18 +1,17 @@
 // See https://github.com/saharNooby/rwkv.cpp/blob/master/rwkv/rwkv_cpp_model.py
 
 use std::{
-  cmp::Ordering,
   ffi::{c_char, CString},
-  iter::Iterator,
   path::Path,
   ptr,
   sync::Arc,
 };
 
-use rand::{distributions::WeightedIndex, prelude::Distribution};
 use rwkv_sys;
 use thiserror::Error;
 use tokenizers::tokenizer::Tokenizer;
+
+mod token_functions;
 
 #[derive(Error, Debug)]
 pub enum RWKVError {
@@ -56,7 +55,7 @@ impl Drop for ModelBindings {
   }
 }
 
-static END_OF_LINE_TOKEN: u32 = 187;
+// static END_OF_LINE_TOKEN: u32 = 187;
 
 impl ModelBindings {
   pub fn new<P: AsRef<Path>>(model_path: &P, n_threads: u32) -> Result<ModelBindings, RWKVError> {
@@ -135,6 +134,7 @@ impl Model {
     let tokenizer =
       Tokenizer::from_file(tokens_path).map_err(|e| RWKVError::TokenReadFailure { source: e })?;
 
+    log::info!("Loaded model and tokenizer");
     Ok(Model {
       model_binding: Arc::new(model_lib),
       tokenizer: Arc::new(tokenizer),
@@ -217,25 +217,6 @@ pub struct Session {
   initial_prompt: Prompt,
 }
 
-fn softmax(vec: &Vec<f32>) -> Vec<f32> {
-  let denominator: f32 = vec.iter().map(|val| val.exp()).sum();
-
-  vec.iter().map(|val| val.exp() / denominator).collect()
-}
-
-fn random_choice(items: &Vec<(usize, f32)>) -> usize {
-  let mut rng = rand::thread_rng();
-
-  let dist: WeightedIndex<f32> =
-    WeightedIndex::new(items.iter().map(|(_id, p)| p)).expect("Invalid probabilities");
-
-  let (id, _p) = items
-    .get(dist.sample(&mut rng))
-    .expect("Sample must exist in original Vec");
-
-  *id
-}
-
 impl Session {
   fn new(
     model: Arc<ModelBindings>,
@@ -255,62 +236,6 @@ impl Session {
     Ok(chat)
   }
 
-  fn pick_token(&self, logits: &Vec<f32>, temp: f32, top_p: f32) -> usize {
-    if temp <= f32::EPSILON {
-      let (id, _val) = logits
-        .iter()
-        .enumerate()
-        .filter(|(_id, p)| !f32::is_nan(**p) && f32::is_finite(**p))
-        .max_by(|(_id1, p1), (_id2, p2)| p1.partial_cmp(p2).unwrap_or(Ordering::Equal))
-        .expect("Max must be there");
-
-      return id;
-    }
-
-    log::trace!("Logits size before filtering {}", logits.len());
-
-    let mut probabilities = softmax(&logits)
-      .into_iter()
-      .enumerate()
-      .filter(|(_id, p)| !f32::is_nan(*p) && f32::is_finite(*p))
-      .collect::<Vec<_>>();
-
-    log::trace!("Probabilities size before picking {}", probabilities.len());
-
-    if top_p <= 1.0 - f32::EPSILON {
-      probabilities.sort_by(|(_id1, p1), (_id2, p2)| p2.partial_cmp(p1).unwrap_or(Ordering::Equal));
-
-      let mut running_sum: f32 = 0.0;
-      probabilities = probabilities
-        .into_iter()
-        .take_while(|(_id, p)| {
-          let take_more = running_sum < top_p;
-          running_sum += p;
-          take_more
-        })
-        .collect();
-    }
-    log::trace!(
-      "Probabilities size after top_p {} = {:?}",
-      probabilities.len(),
-      probabilities
-    );
-
-    if temp <= 1.0 - f32::EPSILON {
-      probabilities = probabilities
-        .into_iter()
-        .map(|(id, p)| (id, p.powf(1.0 / temp)))
-        .collect();
-    }
-
-    log::trace!(
-      "Probabilities size before random_choice {}",
-      probabilities.len()
-    );
-
-    random_choice(&probabilities)
-  }
-
   fn consume_single_token(&mut self, token: u32) -> Result<(), RWKVError> {
     let res = self.model.predict(&self.current_state, token)?;
     self.last_logits = res.next_logits;
@@ -324,9 +249,9 @@ impl Session {
       .encode(text.to_string(), true)
       .map_err(|e| RWKVError::TokenEncodeError { source: e })?;
 
-    log::debug!("Loading tokens...");
+    log::debug!("Loading {} = {} tokens...", text, encoding.get_ids().len());
     for token in encoding.get_ids() {
-      self.consume_single_token(*token)?;
+      self.consume_single_token(*token as u32)?;
     }
 
     Ok(())
@@ -337,7 +262,12 @@ impl Session {
     let mut max_tokens_per_response = 4096; // todo: configurable
 
     loop {
-      let predicted_token = self.pick_token(&self.last_logits, 1.0, 0.5) as u32;
+      if max_tokens_per_response % 8 == 0 {
+        log::debug!("Generating tokens, {} left...", max_tokens_per_response);
+      }
+
+      let predicted_token =
+        token_functions::sample_token(&self.last_logits, &tokens, Default::default()) as u32;
 
       if predicted_token == 0 {
         break;
@@ -345,15 +275,21 @@ impl Session {
       if max_tokens_per_response <= 0 {
         break;
       }
-      if predicted_token == END_OF_LINE_TOKEN && tokens.last().unwrap_or(&0) == &END_OF_LINE_TOKEN {
-        break;
+      tokens.push(predicted_token);
+      self.consume_single_token(predicted_token)?;
+      max_tokens_per_response -= 1;
+
+      let last_decoded = if tokens.len() > 1 {
+        self
+          .tokenizer
+          .decode(tokens[tokens.len() - 2..tokens.len()].to_vec(), true)
+          .map_err(|e| RWKVError::TokenDecodeError { source: e })?
       } else {
-        tokens.push(predicted_token);
+        "".to_string()
+      };
 
-        max_tokens_per_response -= 1;
-
-        log::trace!("Predicted token: {}", predicted_token);
-        self.consume_single_token(predicted_token)?;
+      if last_decoded.contains("\n\n") {
+        break;
       }
     }
 
@@ -361,7 +297,9 @@ impl Session {
     let res = self
       .tokenizer
       .decode(tokens, true)
-      .map_err(|e| RWKVError::TokenDecodeError { source: e })?;
+      .map_err(|e| RWKVError::TokenDecodeError { source: e })?
+      .trim()
+      .to_string();
 
     Ok(res)
   }
