@@ -1,7 +1,6 @@
 # NotGPT
 
-NotGPT is a Rust LLM bot based on the innovative RWKV language model (see [BlinkDL/RWKV-LM](https://github.com/BlinkDL/RWKV-LM)). The `rwkv` care provides bindings to the `rwkv.cpp` implementation that runs
-the model on CPU using [ggerganov/ggml](https://github.com/ggerganov/ggml).
+NotGPT is a Rust LLM bot based on the innovative RWKV language model (see [BlinkDL/RWKV-LM](https://github.com/BlinkDL/RWKV-LM)). The `rwkv` crate provides bindings to the `rwkv.cpp` implementation that runs the model on CPU using [ggerganov/ggml](https://github.com/ggerganov/ggml).
 
 Crates
 
