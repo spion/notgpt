@@ -65,7 +65,7 @@ impl Bot {
       match result {
         Ok(response) => {
           // let response_len = response.result.len();
-          log::debug!("Response is {:?}", response);
+          // log::debug!("Response is {:?}", response);
 
           let messages = response
             .result
@@ -164,7 +164,7 @@ impl Bot {
     session.consume_text(&text)?;
 
     if was_mentioned {
-      let additional_text = format!("{}:", username.to_string());
+      let additional_text = format!("{}:", "Bot".to_string());
       session.consume_text(&additional_text)?;
 
       let output = session.produce_text(512)?;
@@ -226,11 +226,11 @@ User: wat is lhc?
         Ok(occupied.into_mut())
       }
       Entry::Vacant(vacant) => {
-        let initial_prompt = Bot::initial_prompt(&self.username);
+        // let initial_prompt = Bot::initial_prompt(&self.username);
         // If the entry does not exist, create a new ChatbotSession and insert it
         let session = self.model.create_session_custom(&rwkv::SessionOptions {
           prompt: rwkv::Prompt {
-            prompt: initial_prompt,
+            // prompt: initial_prompt,
             ..Default::default()
           },
           ..Default::default()
