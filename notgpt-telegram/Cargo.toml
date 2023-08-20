@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 rwkv = {path = "../rwkv"}
 gpts = {path = "../gpts"}
+notgpt-model = {path = "../notgpt-model"}
 frankenstein = {version = "^0.25.0", features = ["async-http-client"]}
 tokio = {version = "^1.27.0", features = ["full"] }
 anyhow = "^1.0.71"

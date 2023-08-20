@@ -3,11 +3,12 @@
 members = [
   "notgpt-telegram",
   "notgpt-cli",
-  "notgpt-generic-model",
+  "notgpt-model-interface",
+  "notgpt-model",
   "rwkv",
   "rwkv/sys",
   "gpts",
-  "gpts/sys"
+  "gpts/sys",
 ]
 
 # resolver = "2"

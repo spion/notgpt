@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 rwkv = {path = "../rwkv"}
+notgpt-model = {path = "../notgpt-model"}
 anyhow = "^1.0.71"
 tokenizers = "^0.13.3"
 log = "0.4"

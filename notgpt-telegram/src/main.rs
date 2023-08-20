@@ -18,7 +18,7 @@ struct BotOptions {
 }
 
 struct Bot {
-  model: gpts::Model,
+  session_manager: SessionManager,
   channels: HashMap<i64, gpts::Session>,
   api: AsyncApi,
   username: String,
@@ -164,7 +164,7 @@ impl Bot {
     session.consume_text(&text)?;
 
     if was_mentioned {
-      let additional_text = format!("{}:", "Bot".to_string());
+      let additional_text = format!("{}:", "Assistant".to_string());
       session.consume_text(&additional_text)?;
 
       let output = session.produce_text(512)?;
@@ -180,10 +180,13 @@ impl Bot {
     }
   }
 
+  // The following is a verbose and detailed conversation between multiple people and an AI assistant called {0}. {0} is intelligent, knowledgeable, wise and polite, and when appropriate responds, taking into account both the message and the previous text.
+
+  // The following is a verbose and detailed conversation between multiple people and {0}. {0} is an omnipotent, omniscent being with perfect knowledge and control over the universe. {0} is also wise, kind and polite and responds when appropriate, contributing to the conversation between the humans.
+
   fn initial_prompt(bot_username: &String) -> String {
     format!(
       r#"
-
 The following is a verbose and detailed conversation between multiple people and an AI assistant called {0}. {0} is intelligent, knowledgeable, wise and polite, and when appropriate responds, taking into account both the message and the previous text.
 
 User: What year was the french revolution?
@@ -208,7 +211,7 @@ whoeverest: solve for a: 9-a=2
 
 User: wat is lhc?
 
-{0}: LHC is a high-energy particle collider, built by CERN, and completed in 2008. They used it to confirm the existence of the Higgs boson in 2012.
+{0}: LHC is a high-energy particle collider built by CERN, completed in 2008. Scientists used it to confirm the existence of the Higgs boson in 2012.
 
 "#,
       bot_username
@@ -222,7 +225,7 @@ User: wat is lhc?
         Ok(occupied.into_mut())
       }
       Entry::Vacant(vacant) => {
-        let initial_prompt = Bot::initial_prompt(&"Bot".to_string());
+        let initial_prompt = Bot::initial_prompt(&"Assistant".to_string());
         // If the entry does not exist, create a new ChatbotSession and insert it
         let session = self.model.create_session_custom(&gpts::SessionOptions {
           prompt: gpts::Prompt {
