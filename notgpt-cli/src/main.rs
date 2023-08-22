@@ -1,3 +1,5 @@
+pub mod generic_model;
+
 use anyhow::{anyhow, Context, Result};
 use rwkv::Model;
 use std::io;

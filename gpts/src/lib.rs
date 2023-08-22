@@ -1,5 +1,6 @@
 // See https://github.com/saharNooby/rwkv.cpp/blob/master/rwkv/rwkv_cpp_model.py
 
+use core::slice;
 use std::{
   ffi::{c_char, CString},
   path::Path,
@@ -7,11 +8,13 @@ use std::{
   sync::Arc,
 };
 
-use rwkv_sys;
+use gpts_sys::{self, llama_get_logits};
 use thiserror::Error;
 use tokenizers::tokenizer::Tokenizer;
 
 mod token_functions;
+
+const STOP_TOKEN: u32 = 2;
 
 #[derive(Error, Debug)]
 pub enum RWKVError {
@@ -44,18 +47,17 @@ pub enum RWKVError {
 }
 
 struct ModelBindings {
-  ctx: *mut rwkv_sys::rwkv_context,
-  state_buffer_element_count: usize,
+  ctx: *mut gpts_sys::llama_context,
+  // state_buffer_element_count: usize,
   logits_buffer_element_count: usize,
+  n_threads: u32,
 }
 
 impl Drop for ModelBindings {
   fn drop(&mut self) {
-    unsafe { rwkv_sys::rwkv_free(self.ctx) }
+    unsafe { gpts_sys::llama_free(self.ctx) }
   }
 }
-
-// static END_OF_LINE_TOKEN: u32 = 187;
 
 impl ModelBindings {
   pub fn new<P: AsRef<Path>>(model_path: &P, n_threads: u32) -> Result<ModelBindings, RWKVError> {
@@ -68,50 +70,47 @@ impl ModelBindings {
     let cstring = CString::new(model_str).expect("Failed to create CString");
     let raw_ptr: *const c_char = cstring.as_ptr();
 
-    let ctx = unsafe { rwkv_sys::rwkv_init_from_file(raw_ptr, n_threads) };
+    let params = gpts_sys::llama_context_params {
+      logits_all: false,
+      n_ctx: 2048,
+      ..unsafe { gpts_sys::llama_context_default_params() }
+    };
 
-    let state_size = unsafe { rwkv_sys::rwkv_get_state_buffer_element_count(ctx) } as usize;
-    let logits_size = unsafe { rwkv_sys::rwkv_get_logits_buffer_element_count(ctx) } as usize;
+    let ctx = unsafe { gpts_sys::llama_init_from_file(raw_ptr, params) };
 
+    // let state_size = unsafe { rwkv_sys::rwkv_get_state_buffer_element_count(ctx) } as usize;
+    let logits_size = unsafe { gpts_sys::llama_n_vocab(ctx) } as usize;
+
+    // gpts_sys::llama_tokenize(
     Ok(ModelBindings {
       ctx: ctx,
-
-      state_buffer_element_count: state_size,
+      n_threads,
+      // state_buffer_element_coun t: state_size,
       logits_buffer_element_count: logits_size,
     })
   }
 
-  pub fn predict(
-    &self,
-    current_state: &Option<Vec<f32>>,
-    token: u32,
-  ) -> Result<PredictResult, RWKVError> {
-    let mut next_logits: Vec<f32> = vec![0.0f32; self.logits_buffer_element_count];
-
-    let mut next_state = match current_state {
-      None => vec![0.0f32; self.state_buffer_element_count],
-      Some(state) => state.clone(),
-    };
-
-    let state_arg = match current_state {
-      None => ptr::null_mut(),
-      Some(_) => next_state.as_mut_ptr(),
-    };
+  pub fn predict(&self, n_past: u32, token: u32) -> Result<PredictResult, RWKVError> {
+    let token_v = vec![token as i32];
 
     let success = unsafe {
-      rwkv_sys::rwkv_eval(
+      gpts_sys::llama_eval(
         self.ctx,
-        token,
-        state_arg,
-        next_state.as_mut_ptr(),
-        next_logits.as_mut_ptr(),
+        token_v.as_ptr(),
+        1,
+        n_past as i32,
+        self.n_threads as i32,
       )
     };
 
-    if success {
+    if success == 0 {
+      let logits = unsafe { gpts_sys::llama_get_logits(self.ctx) };
+      let logits_vec =
+        unsafe { slice::from_raw_parts(logits, self.logits_buffer_element_count).to_vec() };
+
       Ok(PredictResult {
-        next_state,
-        next_logits,
+        n_past: n_past + 1,
+        next_logits: logits_vec,
       })
     } else {
       Err(RWKVError::TokenPredictionError)
@@ -158,7 +157,7 @@ impl Model {
 }
 
 pub struct PredictResult {
-  next_state: Vec<f32>,
+  n_past: u32,
   next_logits: Vec<f32>,
 }
 
@@ -212,7 +211,7 @@ pub struct SessionOptions {
 pub struct Session {
   model: Arc<ModelBindings>,
   tokenizer: Arc<Tokenizer>,
-  current_state: Option<Vec<f32>>,
+  n_past: u32,
   text_so_far: String,
   last_logits: Vec<f32>,
   initial_prompt: Prompt,
@@ -227,7 +226,7 @@ impl Session {
     let mut chat = Session {
       model,
       tokenizer,
-      current_state: None,
+      n_past: 0,
       text_so_far: "".to_string(),
       last_logits: vec![],
       initial_prompt: options.prompt.clone(),
@@ -239,9 +238,9 @@ impl Session {
   }
 
   fn consume_single_token(&mut self, token: u32) -> Result<(), RWKVError> {
-    let res = self.model.predict(&self.current_state, token)?;
+    let res = self.model.predict(self.n_past, token)?;
     self.last_logits = res.next_logits;
-    self.current_state = Some(res.next_state);
+    self.n_past = res.n_past;
     Ok(())
   }
 
@@ -278,7 +277,7 @@ impl Session {
       let predicted_token =
         token_functions::sample_token(&self.last_logits, &tokens, Default::default()) as u32;
 
-      if predicted_token == 0 {
+      if predicted_token == STOP_TOKEN {
         break;
       }
       if max_tokens_per_response <= 0 {
@@ -288,16 +287,16 @@ impl Session {
       self.consume_single_token(predicted_token)?;
       max_tokens_per_response -= 1;
 
-      let last_decoded = if tokens.len() > 1 {
+      let last_decoded = if tokens.len() > 2 {
         self
           .tokenizer
-          .decode(tokens[tokens.len() - 2..tokens.len()].to_vec(), true)
+          .decode(tokens[tokens.len() - 3..tokens.len()].to_vec(), true)
           .map_err(|e| RWKVError::TokenDecodeError { source: e })?
       } else {
         "".to_string()
       };
 
-      if last_decoded.contains("\n\n") {
+      if last_decoded.contains("\n\n\n") {
         break;
       }
     }

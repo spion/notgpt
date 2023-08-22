@@ -1,3 +1,6 @@
 [submodule "rwkv/sys/rwkv.cpp"]
 	path = rwkv/sys/rwkv.cpp
 	url = https://github.com/saharNooby/rwkv.cpp.git
+[submodule "gpts/sys/llama.cpp"]
+	path = gpts/sys/llama.cpp
+	url = https://github.com/ggerganov/llama.cpp

@@ -18,8 +18,8 @@ struct BotOptions {
 }
 
 struct Bot {
-  model: rwkv::Model,
-  channels: HashMap<i64, rwkv::Session>,
+  model: gpts::Model,
+  channels: HashMap<i64, gpts::Session>,
   api: AsyncApi,
   username: String,
 }
@@ -27,7 +27,7 @@ struct Bot {
 impl Bot {
   fn new(options: BotOptions) -> Result<Bot> {
     Ok(Bot {
-      model: rwkv::Model::new(&options.model_path, &options.tokens_path, options.n_threads)?,
+      model: gpts::Model::new(&options.model_path, &options.tokens_path, options.n_threads)?,
       channels: HashMap::new(),
       api: AsyncApi::new(&options.api_token),
       username: options.username,
@@ -184,19 +184,15 @@ impl Bot {
     format!(
       r#"
 
-The following is a verbose and detailed conversation between multiple people and an AI assistant called {0}. The people may sometimes ask a question where {0} might need to answer. {0} is intelligent, knowledgeable, wise and polite, and when appropriate responds, taking into account both the message and the previous text.
+The following is a verbose and detailed conversation between multiple people and an AI assistant called {0}. {0} is intelligent, knowledgeable, wise and polite, and when appropriate responds, taking into account both the message and the previous text.
 
-Jack Jones: What year was the french revolution?
-
-Jill Someone: Not sure. {0} what year was it?
+User: What year was the french revolution?
 
 {0}: The French Revolution started in 1789, and lasted 10 years until 1799.
 
-The Math Nerd: Wow, thats pretty impressive.
+whoeverest: Wow, thats pretty impressive.
 
-Moe: What is?
-
-The Math Nerd: 3+5=?
+whoeverest: 3+5=?
 
 {0}: The answer is 8.
 
@@ -204,9 +200,9 @@ Moe: can you gues who I'll marry?
 
 {0}: Only if you tell me more about yourself - what are your interests?
 
-The Math Nerd: hah, he got you.
+whoeverest: hah, he got you.
 
-The Math Nerd: solve for a: 9-a=2
+whoeverest: solve for a: 9-a=2
 
 {0}: The answer is a = 7, because 9 - 7 = 2.
 
@@ -219,18 +215,18 @@ User: wat is lhc?
     )
   }
 
-  fn get_or_create_session(&mut self, id: &i64) -> Result<&mut rwkv::Session> {
+  fn get_or_create_session(&mut self, id: &i64) -> Result<&mut gpts::Session> {
     match self.channels.entry(*id) {
       Entry::Occupied(occupied) => {
         // If the entry exists, return a reference to the existing ChatbotSession
         Ok(occupied.into_mut())
       }
       Entry::Vacant(vacant) => {
-        // let initial_prompt = Bot::initial_prompt(&self.username);
+        let initial_prompt = Bot::initial_prompt(&"Bot".to_string());
         // If the entry does not exist, create a new ChatbotSession and insert it
-        let session = self.model.create_session_custom(&rwkv::SessionOptions {
-          prompt: rwkv::Prompt {
-            // prompt: initial_prompt,
+        let session = self.model.create_session_custom(&gpts::SessionOptions {
+          prompt: gpts::Prompt {
+            prompt: initial_prompt,
             ..Default::default()
           },
           ..Default::default()
@@ -261,7 +257,7 @@ async fn main() -> Result<()> {
     model_path,
     tokens_path,
     api_token,
-    n_threads: 4,
+    n_threads: 6,
     username,
   };
 

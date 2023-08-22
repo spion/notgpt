@@ -14,3 +14,9 @@ Todo:
 
 - notgpt-api-server - A standalone server. Due to the nature of RNN models, the API will likely
   be stateful and necessarily differ from OpenAI's or other APIs.
+
+
+README Todo:
+- building
+- usage
+- document support for llama 2
