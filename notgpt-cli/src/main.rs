@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Context, Result};
-use notgpt_model::{SessionManager, SessionOptions};
+use notgpt_model::{AnySession, Session, SessionOptions};
 use rwkv::Model;
-use std::io;
+use std::{
+  io,
+  sync::{Arc, Mutex},
+};
 use tokenizers::Tokenizer;
 
 fn main() -> Result<()> {
@@ -15,21 +18,21 @@ fn main() -> Result<()> {
   let tokens_path = std::env::var("TOKENS_PATH")
     .with_context(|| "TOKENS_PATH variable unset, set it to the path of the RWKV tokenizer json")?;
 
-  let model = Model::new(&model_path, 6)
-    .map_err(|e| anyhow!(e))
-    .with_context(|| "Unable to initialize model")?;
+  let model = Arc::new(Mutex::new(
+    Model::new(&model_path, 6)
+      .map_err(|e| anyhow!(e))
+      .with_context(|| "Unable to initialize model")?,
+  ));
 
-  let tokenizer = Tokenizer::from_file(&tokens_path).unwrap();
+  let tokenizer = Arc::new(Tokenizer::from_file(&tokens_path).unwrap());
 
-  let mut sessionManager = SessionManager::new(model, tokenizer);
-
-  let mut chat = sessionManager.create_session(&Default::default())?;
+  let mut chat = Session::new(model.clone(), tokenizer.clone(), &Default::default())?;
 
   log::info!("Sesison started");
 
   println!("> ");
   for line in io::stdin().lines() {
-    let response = sessionManager.generate_response(&mut chat, &line?, 512)?;
+    let response = chat.generate_response(&line?, 512)?;
     println!("{}", response);
 
     println!("> ")

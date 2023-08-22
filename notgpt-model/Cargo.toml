@@ -12,3 +12,4 @@ log = "0.4"
 notgpt-model-interface = { path = "../notgpt-model-interface" }
 tokenizers = "^0.13.3"
 thiserror = "^1.0.40"
+keepcalm = "^0.3.5"

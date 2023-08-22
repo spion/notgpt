@@ -9,6 +9,7 @@ use std::{
 
 use gpts_sys::{self};
 use notgpt_model_interface::{GenericModel, NotGptError};
+use tokenizers::Tokenizer;
 
 pub struct Model {
   ctx: *mut gpts_sys::llama_context,
@@ -23,7 +24,7 @@ impl Drop for Model {
   }
 }
 
-struct State {
+pub struct State {
   n_past: u32,
   current_state: Vec<u8>,
 }

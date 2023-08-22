@@ -9,8 +9,10 @@ edition = "2021"
 rwkv = {path = "../rwkv"}
 gpts = {path = "../gpts"}
 notgpt-model = {path = "../notgpt-model"}
+notgpt-model-interface = {path = "../notgpt-model-interface"}
 frankenstein = {version = "^0.25.0", features = ["async-http-client"]}
 tokio = {version = "^1.27.0", features = ["full"] }
 anyhow = "^1.0.71"
 log = "^0.4"
 env_logger = "^0.10"
+tokenizers = "^0.13.3"

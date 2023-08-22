@@ -29,6 +29,9 @@ pub enum NotGptError {
 
   #[error("Token prediction error")]
   TokenPredictionError,
+
+  #[error("Intertwined model usage error")]
+  IntertwinedModelUsageError,
 }
 
 pub trait GenericModel {

@@ -1,12 +1,16 @@
 use std::{
+  any::Any,
   collections::{hash_map::Entry, HashMap},
-  sync::Arc,
+  sync::{Arc, Mutex as SMutex},
 };
 
 use anyhow::{anyhow, Context, Result};
 use frankenstein::{
   AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, SendMessageParams, UpdateContent,
 };
+use gpts::Model;
+use notgpt_model::{AnySession, AnySessionManager, Session, SessionManager};
+use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
 struct BotOptions {
@@ -18,17 +22,18 @@ struct BotOptions {
 }
 
 struct Bot {
-  session_manager: SessionManager,
-  channels: HashMap<i64, gpts::Session>,
+  session_manager: Box<dyn AnySessionManager>,
   api: AsyncApi,
   username: String,
 }
 
 impl Bot {
   fn new(options: BotOptions) -> Result<Bot> {
+    let model = Model::new(&options.model_path, 8)?;
+    let sm = SessionManager::new(model, options.tokens_path, Default::default())?;
+
     Ok(Bot {
-      model: gpts::Model::new(&options.model_path, &options.tokens_path, options.n_threads)?,
-      channels: HashMap::new(),
+      session_manager: Box::new(sm),
       api: AsyncApi::new(&options.api_token),
       username: options.username,
     })
@@ -218,25 +223,8 @@ User: wat is lhc?
     )
   }
 
-  fn get_or_create_session(&mut self, id: &i64) -> Result<&mut gpts::Session> {
-    match self.channels.entry(*id) {
-      Entry::Occupied(occupied) => {
-        // If the entry exists, return a reference to the existing ChatbotSession
-        Ok(occupied.into_mut())
-      }
-      Entry::Vacant(vacant) => {
-        let initial_prompt = Bot::initial_prompt(&"Assistant".to_string());
-        // If the entry does not exist, create a new ChatbotSession and insert it
-        let session = self.model.create_session_custom(&gpts::SessionOptions {
-          prompt: gpts::Prompt {
-            prompt: initial_prompt,
-            ..Default::default()
-          },
-          ..Default::default()
-        })?;
-        Ok(vacant.insert(session))
-      }
-    }
+  fn get_or_create_session(&mut self, id: &i64) -> Result<&mut dyn AnySession> {
+    Ok(self.session_manager.get_session(&id.to_string())?)
   }
 }
 
