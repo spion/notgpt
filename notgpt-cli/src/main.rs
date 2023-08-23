@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use notgpt_model::{AnySession, Session, SessionOptions};
+use notgpt_model::{AnySession, Session};
 use rwkv::Model;
 use std::{
   io,

@@ -9,8 +9,6 @@ use std::{
 use notgpt_model_interface::{GenericModel, NotGptError};
 use rwkv_sys;
 
-mod token_functions;
-
 pub struct Model {
   ctx: *mut rwkv_sys::rwkv_context,
   state_buffer_element_count: usize,

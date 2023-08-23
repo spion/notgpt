@@ -1,16 +1,11 @@
-use std::{
-  any::Any,
-  collections::{hash_map::Entry, HashMap},
-  sync::{Arc, Mutex as SMutex},
-};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use frankenstein::{
   AsyncApi, AsyncTelegramApi, GetUpdatesParams, Message, SendMessageParams, UpdateContent,
 };
 use gpts::Model;
-use notgpt_model::{AnySession, AnySessionManager, Session, SessionManager};
-use tokenizers::Tokenizer;
+use notgpt_model::{AnySession, AnySessionManager, SessionManager};
 use tokio::sync::Mutex;
 
 struct BotOptions {
@@ -29,7 +24,7 @@ struct Bot {
 
 impl Bot {
   fn new(options: BotOptions) -> Result<Bot> {
-    let model = Model::new(&options.model_path, 8)?;
+    let model = Model::new(&options.model_path, options.n_threads)?;
     let sm = SessionManager::new(model, options.tokens_path, Default::default())?;
 
     Ok(Bot {
@@ -151,7 +146,7 @@ impl Bot {
       }
     }
 
-    log::debug!("Processing {:?}", &message);
+    // log::debug!("Processing {:?}", &message);
 
     let user = message.from.unwrap();
     let msg_text = message

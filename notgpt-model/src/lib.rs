@@ -1,13 +1,11 @@
 use std::{
   collections::{hash_map::Entry, HashMap},
-  hash::Hash,
   path::Path,
   sync::{Arc, Mutex},
 };
 
 mod token_functions;
 
-use keepcalm::SharedMut;
 use notgpt_model_interface::{GenericModel, NotGptError};
 use tokenizers::Tokenizer;
 
