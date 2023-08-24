@@ -4,7 +4,9 @@ NotGPT is a Rust LLM bot which supports both
 - the innovative open source RWKV language model (see [BlinkDL/RWKV-LM](https://github.com/BlinkDL/RWKV-LM)),
 - the llama family of models
 
-The `rwkv` crate provides bindings to the `rwkv.cpp` implementation that runs the model on CPU using [ggerganov/ggml](https://github.com/ggerganov/ggml).
+
+The `rwkv` and `gpts` crates provide bindings to the `rwkv.cpp` and `llama.cpp` implementations respectively that run the models on CPU using [ggerganov/ggml](https://github.com/ggerganov/ggml).
+
 
 Crates
 
