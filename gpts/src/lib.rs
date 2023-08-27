@@ -11,6 +11,8 @@ use std::{
 use gpts_sys::{self};
 use notgpt_model_interface::{GenericModel, NotGptError};
 
+const CONTEXT_MAX: usize = 4096;
+
 pub struct Model {
   ctx: *mut gpts_sys::llama_model,
   // state_buffer_element_count: usize,
@@ -28,7 +30,7 @@ impl Drop for Model {
 }
 
 pub struct State {
-  n_past: u32,
+  n_past: usize,
   ctx: *mut gpts_sys::llama_context,
   // current_state: Vec<u8>,
 }
@@ -58,7 +60,7 @@ impl Model {
 
     gpts_sys::llama_context_params {
       logits_all: false,
-      n_ctx: 4096,
+      n_ctx: CONTEXT_MAX as i32,
       // n_batch: 8,
       ..original_defaults
     }
@@ -109,16 +111,19 @@ impl GenericModel for Model {
   fn predict_logits(
     &mut self,
     session: &mut Self::SessionState,
-    input_tokens: &Vec<u32>,
+    input_tokens: &[u32],
   ) -> Result<Vec<f32>, NotGptError> {
     self.ensure_init_state(session);
+
+    if session.n_past + input_tokens.len() >= CONTEXT_MAX {
+      session.n_past = CONTEXT_MAX - input_tokens.len() - 1;
+    }
 
     let success = unsafe {
       gpts_sys::llama_eval(
         session.ctx,
-        // self.ctx,
         input_tokens.as_ptr() as *const i32,
-        1,
+        input_tokens.len() as i32,
         session.n_past as i32,
         self.n_threads as i32,
       )
@@ -129,7 +134,8 @@ impl GenericModel for Model {
       let logits_vec =
         unsafe { slice::from_raw_parts(logits, self.logits_buffer_element_count).to_vec() };
 
-      session.n_past = session.n_past + 1;
+      session.n_past = session.n_past + input_tokens.len();
+
       Ok(logits_vec)
     } else {
       Err(NotGptError::TokenPredictionError)
