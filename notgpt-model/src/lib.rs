@@ -78,6 +78,10 @@ impl<Model: GenericModel> Session<Model> {
       .encode(text.to_string(), true)
       .map_err(|e| NotGptError::TokenEncodeError { source: e })?;
 
+    if encoding.len() < 1 {
+      return Ok(());
+    }
+
     log::debug!(
       "Loading '{}' = {} tokens...",
       text,
@@ -92,9 +96,8 @@ impl<Model: GenericModel> Session<Model> {
 
     model.load_session_state(&mut self.state);
 
-    for token in encoding.get_ids() {
-      self.consume_single_token(&mut model, *token as u32)?;
-    }
+    let res = model.predict_logits(&mut self.state, encoding.get_ids())?;
+    self.last_logits = res;
 
     model.save_session_state(&mut self.state);
 
@@ -128,10 +131,7 @@ impl<Model: GenericModel> Session<Model> {
 
       let predicted_token = sample_token(&self.last_logits, &tokens, Default::default()) as u32;
 
-      if predicted_token == Model::STOP_TOKEN {
-        break;
-      }
-      if max_tokens_per_response <= 0 {
+      if predicted_token == Model::STOP_TOKEN || max_tokens_per_response <= 0 {
         break;
       }
 
