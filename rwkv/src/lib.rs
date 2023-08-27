@@ -43,7 +43,7 @@ impl GenericModel for Model {
   fn predict_logits(
     &mut self,
     session: &mut Self::SessionState,
-    input_tokens: &Vec<u32>,
+    input_tokens: &[u32],
   ) -> Result<Vec<f32>, NotGptError> {
     let mut end_result = Err(NotGptError::TokenPredictionError);
 

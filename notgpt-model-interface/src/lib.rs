@@ -42,7 +42,7 @@ pub trait GenericModel {
   fn predict_logits(
     &mut self,
     session: &mut Self::SessionState,
-    input_tokens: &Vec<u32>,
+    input_tokens: &[u32],
   ) -> Result<Vec<f32>, NotGptError>;
 
   fn load_session_state(&mut self, state: &mut Self::SessionState);
